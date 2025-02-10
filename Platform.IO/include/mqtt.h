@@ -1,52 +1,17 @@
-PubSubClient client(espClient);
+#ifndef MQTT_H
+#define MQTT_H 1
 
-void reconnect() {
-  // Loop until we're reconnected
-  char lwBuffer[30] = {0};
-  sprintf(lwBuffer, userData.mbusinoName, "/lastwill");
-  if (client.connect(userData.mbusinoName,userData.mqttUser,userData.mqttPswrd,lwBuffer,0,false,"I am going offline")) {
-    // Once connected, publish an announcement...
-    conCounter++;
-    if(conCounter == 1){
-      client.publish(String(String(userData.mbusinoName) + "/start").c_str(), "Bin hochgefahren, WLAN und MQTT steht");
-    }
-    else{
-      client.publish(String(String(userData.mbusinoName) + "/reconnect").c_str(), "Online again!");
-      adMbusMessageCounter = 2;
-      adSensorMessageCounter = 2;
-    }
-    // ... and resubscribe
-    client.subscribe(String(String(userData.mbusinoName) + "/calibrateAverage").c_str());
-    client.subscribe(String(String(userData.mbusinoName) + "/calibrateSensor").c_str());
-    client.subscribe(String(String(userData.mbusinoName) + "/calibrateValue").c_str());
-    client.subscribe(String(String(userData.mbusinoName) + "/calibrateBME").c_str());
-    client.subscribe(String(String(userData.mbusinoName) + "/calibrateSet0").c_str());
-    client.subscribe(String(String(userData.mbusinoName) + "/mbusPolling").c_str());    
-  }
-}
+#include <MbusinoNetwork.h>
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  if(userData.extension > 0){
-    if (strcmp(topic,String(String(userData.mbusinoName) + "/calibrateAverage").c_str())==0){  
-      calibrationAverage();
-    }
-    if (strcmp(topic,String(String(userData.mbusinoName) + "/calibrateSensor").c_str())==0){  
-      calibrationSensor(atoi((char*)payload)-1);
-    }
-    if (strcmp(topic,String(String(userData.mbusinoName) + "/calibrateValue").c_str())==0){  
-      calibrationValue(atof((char*)payload));
-    }  
-    if(userData.extension == 5){
-      if (strcmp(topic,String(String(userData.mbusinoName) + "/calibrateBME").c_str())==0){  
-        calibrationBME();
-      }
-    }
-    if (strcmp(topic,String(String(userData.mbusinoName) + "/calibrateSet0").c_str())==0){  
-      calibrationSet0();
-    } 
-  }
-  if (strcmp(topic,String(String(userData.mbusinoName) + "/mbusPolling").c_str())==0){  
-    pollingAddress = atoi((char*)payload);
-    polling = true;
-  }   
-}   
+extern uint8_t adMbusMessageCounter; // Counter for autodiscouver mbus message.
+extern uint8_t adSensorMessageCounter; // Counter for autodiscouver mbus message.
+extern uint8_t pollingAddress;
+extern bool polling;
+
+
+void reconnect();
+
+void callback(char* topic, byte* payload, unsigned int length);
+
+
+#endif  

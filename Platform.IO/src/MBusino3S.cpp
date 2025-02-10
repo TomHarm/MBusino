@@ -14,7 +14,6 @@ You should have received a copy of the GNU General Public License along with thi
 */
 
 #include <Arduino.h>
-#include <PubSubClient.h>
 #include <OneWire.h>            // Library for OneWire Bus
 #include <DallasTemperature.h>  //Library for DS18B20 Sensors
 #include <Wire.h>
@@ -66,7 +65,6 @@ HardwareSerial MbusSerial(1);
 #define SEALEVELPRESSURE_HPA (1013.25)
 Adafruit_BME280 bme;  // I2C
 MBusinoLib payload(254);
-WiFiClient espClient;
 DNSServer dnsServer;
 
 
@@ -97,16 +95,12 @@ uint8_t mbusAddress[3] = {0};
 bool mqttcon = false;
 bool apMode = false;
 
-uint16_t conCounter = 0;
 
 uint8_t currentAddress = 0;
 uint8_t addressCounter = 0;
-uint8_t pollingAddress = 0;
 
 int Startadd = 0x13;  // Start address for decoding
 
-float OW[7] = {0};         // variables for DS18B20 Onewire sensors 
-float temperatur = 0;      // Variablen für den BLE280 am I2C
 float druck = 0;
 float hoehe = 0;
 float feuchte = 0;
@@ -118,7 +112,6 @@ char jsonstring[4092] = { 0 };
 uint8_t address = 0; 
 bool engelmann = false;
 bool waitForRestart = false;
-bool polling = false;
 
 unsigned long timerMQTT = 15000;
 unsigned long timerSensorRefresh1 = 0;
@@ -142,19 +135,10 @@ void calibrationSet0();
 void calibrationBME();
 // void setupServer();
 
-uint8_t eeAddrCalibrated = 0;
-uint8_t eeAddrCredentialsSaved = 32;
-uint8_t eeAddrOffset[7] = {4,8,12,16,20,24,28};  //EEPROM address to start reading from
 uint16_t calibrated = 123;  // shows if EEPROM used befor for offsets
 uint16_t credentialsSaved = 123;  // shows if EEPROM used befor for credentials
-float offset[7] = {0};
-float OWwO[7] = {0};  // Variables for DS18B20 Onewire Sensores with Offset (One Wire1 with Offset)
-bool OWnotconnected[7] = {false};
-uint8_t sensorToCalibrate = 0;
 
 
-uint8_t adMbusMessageCounter = 0; // Counter for autodiscouver mbus message.
-uint8_t adSensorMessageCounter = 0; // Counter for autodiscouver mbus message.
 
 //outsourced program parts
 #include "html.h"
