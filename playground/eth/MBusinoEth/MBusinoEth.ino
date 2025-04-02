@@ -37,7 +37,9 @@ You should have received a copy of the GNU General Public License along with thi
 #define MBUSINO_VERSION "0.9.17eth"
 // Pins for an ESP32 C3 Supermini
 #ifndef ETH_PHY_CS
+#ifndef ETH_PHY_TYPE
 #define ETH_PHY_TYPE     ETH_PHY_W5500
+#endif
 #define ETH_PHY_ADDR     1
 #define ETH_PHY_CS       7
 #define ETH_PHY_IRQ      2

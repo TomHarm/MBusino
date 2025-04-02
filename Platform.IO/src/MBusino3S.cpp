@@ -13,6 +13,7 @@ You should have received a copy of the GNU General Public License along with thi
 ****************************************************
 */
 
+#include <SPI.h>
 #include <Arduino.h>
 #include <OneWire.h>            // Library for OneWire Bus
 #include <DallasTemperature.h>  //Library for DS18B20 Sensors
@@ -23,16 +24,8 @@ You should have received a copy of the GNU General Public License along with thi
 #include <DNSServer.h>
 #include <ArduinoOTA.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <ESPAsyncTCP.h>
-#elif defined(ESP32)
-#include <WiFi.h>
-#include <AsyncTCP.h>
-HardwareSerial MbusSerial(1);
-#endif
-
 #include <MBusinoLib.h>  // Library for decode M-Bus
+#include <MBusCom.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 
@@ -41,7 +34,47 @@ HardwareSerial MbusSerial(1);
 #include <html.h>
 
 
-#define MBUSINO_VERSION "0.9.16"
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#include <ESPAsyncTCP.h>
+#elif defined(ESP32)
+#include <WiFi.h>
+#include <AsyncTCP.h>
+
+#ifdef WT32_ETH01
+HardwareSerial MbusSerial = Serial2;
+#else
+HardwareSerial MbusSerial(1);
+#endif
+MBusCom MBusCom(&MbusSerial);
+#endif
+
+// Pins for an ESP32 C3 Supermini
+#ifndef ETH_PHY_CS
+#ifndef ETH_PHY_TYPE
+#define ETH_PHY_TYPE     ETH_PHY_W5500
+#endif
+#define ETH_PHY_TYPE        ETH_PHY_LAN8720
+#ifndef ETH_PHY_ADDR
+#define ETH_PHY_ADDR         0
+#endif
+#ifndef ETH_PHY_MDC
+#define ETH_PHY_MDC         23
+#endif
+#ifndef ETH_PHY_MDIO
+#define ETH_PHY_MDIO        18
+#endif
+#ifndef ETH_PHY_POWER
+#define ETH_PHY_POWER       -1
+#endif
+
+#define ETH_CLK_MODE        ETH_CLOCK_GPIO0_IN
+#endif
+
+#include <ETH.h>
+
+
+// #define MBUSINO_VERSION "0.9.19"
 
 #if defined(ESP8266)
 #define ONE_WIRE_BUS1 2   //D4
@@ -51,6 +84,11 @@ HardwareSerial MbusSerial(1);
 #define ONE_WIRE_BUS5 0   //D3
 #define ONE_WIRE_BUS6 5   //D1
 #define ONE_WIRE_BUS7 4   //D2
+#elif defined(WT32_ETH01) // Find out what Board would work
+#define ONE_WIRE_BUS1 15
+#define ONE_WIRE_BUS2 14
+#define ONE_WIRE_BUS3 4
+#define MBUSSerial Serial2
 #elif defined(ESP32)
 #define ONE_WIRE_BUS1 16 //2   //D4
 #define ONE_WIRE_BUS2 11  //13  //D7
@@ -61,8 +99,10 @@ HardwareSerial MbusSerial(1);
 #define ONE_WIRE_BUS7 33  //4   //D2
 #endif
 
+#define SLAVE_MBUS_ADDRESS 254
 
 #define SEALEVELPRESSURE_HPA (1013.25)
+
 Adafruit_BME280 bme;  // I2C
 MBusinoLib payload(254);
 DNSServer dnsServer;
@@ -72,23 +112,25 @@ DNSServer dnsServer;
 OneWire oneWire1(ONE_WIRE_BUS1);
 OneWire oneWire2(ONE_WIRE_BUS2);
 OneWire oneWire3(ONE_WIRE_BUS3);
+#ifndef WT32_ETH01
 OneWire oneWire4(ONE_WIRE_BUS4);
 OneWire oneWire5(ONE_WIRE_BUS5);
 
 OneWire oneWire6(ONE_WIRE_BUS6);
 OneWire oneWire7(ONE_WIRE_BUS7);
-
+#endif
 
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensor1(&oneWire1);
 DallasTemperature sensor2(&oneWire2);
 DallasTemperature sensor3(&oneWire3);
+#ifndef WT32_ETH01
 DallasTemperature sensor4(&oneWire4);
 DallasTemperature sensor5(&oneWire5);
 
 DallasTemperature sensor6(&oneWire6);
 DallasTemperature sensor7(&oneWire7);
-
+#endif
 
 uint8_t mbusAddress[3] = {0};
 
@@ -112,6 +154,8 @@ char jsonstring[4092] = { 0 };
 uint8_t address = 0; 
 bool engelmann = false;
 bool waitForRestart = false;
+// bool polling = false;
+bool ledStatus = false;
 
 unsigned long timerMQTT = 15000;
 unsigned long timerSensorRefresh1 = 0;
@@ -121,13 +165,8 @@ unsigned long timerDebug = 0;
 unsigned long timerReconnect = 0;
 unsigned long timerReboot = 0;
 unsigned long timerSetAddress = 0;
+unsigned long timerPulse = 0;
 
-void mbus_request_data(byte address);
-void mbus_short_frame(byte address, byte C_field);
-bool mbus_get_response(byte *pdata, unsigned char len_pdata);
-void mbus_normalize(byte address);
-void mbus_clearRXbuffer();
-void mbus_set_address(byte oldaddress, byte newaddress);
 void calibrationAverage();
 void calibrationSensor(uint8_t sensor);
 void calibrationValue(float value);
@@ -139,26 +178,41 @@ uint16_t calibrated = 123;  // shows if EEPROM used befor for offsets
 uint16_t credentialsSaved = 123;  // shows if EEPROM used befor for credentials
 
 
-
 //outsourced program parts
 #include "html.h"
 #include "server.h"
 #include "mqtt.h"
-#include "mbus.h"
 #include "calibration.h"
 #include "sensorRefresh.h"
 #include "autodiscover.h"
+#ifdef ESP32
+#include "networkEvents.h"
+#endif
 
 
 void setup() {
 
-  #if defined(ESP8266)
-  Serial.setRxBufferSize(256);
-  Serial.begin(MBUS_BAUD_RATE, SERIAL_8E1);
-  #elif defined(ESP32)
-  MbusSerial.setRxBufferSize(256);
-  MbusSerial.begin(MBUS_BAUD_RATE, SERIAL_8E1, 37, 39);
+ 
+ //  pinMode(LED_BUILTIN, OUTPUT);
+   Serial.begin(115200);
+   Serial.printf("%s starts.\r\n", __FILE__);
+
+   delay(1500);
+  
+  MBusCom.begin();
+
+  Serial.printf("Started MBus, now ETH");
+
+  #if ESP_ARDUINO_VERSION_MAJOR >= 3
+  // The argument order changed in esp32-arduino v3+
+     ETH.begin(ETH_PHY_LAN8720, 1, 23, 18, 16, ETH_CLOCK_GPIO0_IN);
+  #else
+    ETH.begin(1, 16, 23, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
   #endif
+
+  Serial.println("ETH started, now reading EEPRPOM");
+
+  delay(1000);
 
   EEPROM.begin(512);
   EEPROM.get(eeAddrCalibrated, calibrated);
@@ -250,11 +304,7 @@ void setup() {
   });
   ArduinoOTA.setPassword((const char *)"mbusino");
   server.onNotFound(onRequest);
-  #if defined(ESP8266)
-  ArduinoOTA.begin(&server);
-  #elif defined(ESP32)
   ArduinoOTA.begin();
-  #endif
   server.begin();
 
   client.setBufferSize(6000);
@@ -264,15 +314,20 @@ void setup() {
     sensor1.begin();
     sensor2.begin();
     sensor3.begin();
+#ifndef WT32_ETH01
     sensor4.begin();
     sensor5.begin();
-    
+#endif
+
     sensor1.setWaitForConversion(false);  // Request temperature conversion - non-blocking / async
     sensor2.setWaitForConversion(false);
     sensor3.setWaitForConversion(false);
+#ifndef WT32_ETH01
     sensor4.setWaitForConversion(false);
     sensor5.setWaitForConversion(false);
+#endif
   }
+#ifndef WT32_ETH01
   if(userData.extension == 7){
     sensor6.begin();
     sensor7.begin();
@@ -280,6 +335,7 @@ void setup() {
     sensor6.setWaitForConversion(false);
     sensor7.setWaitForConversion(false);    
   }
+#endif
 
   if(userData.extension == 5){
     // Vorbereitungen für den BME280
@@ -330,13 +386,13 @@ void loop() {
         newAddressReceived = false;
         waitToSetAddress = true;
         timerSetAddress = millis();
-        mbus_normalize(254);
+        MBusCom.normalize(254);
         client.publish(String(String(userData.mbusinoName) + "/setAddress/1").c_str(), "done");
       }
 
       if(waitToSetAddress == true && (millis() - 500) > timerSetAddress){
         waitToSetAddress = false;
-        mbus_set_address(254,newAddress);
+        MBusCom.set_address(254,newAddress);
         client.publish(String(String(userData.mbusinoName) + "/setAddress/2").c_str(), String(newAddress).c_str());
       }
 
@@ -426,19 +482,19 @@ void loop() {
           currentAddress = mbusAddress[addressCounter];
           addressCounter++;
         }
-        mbus_normalize(currentAddress);
+        MBusCom.normalize(currentAddress);
       }
 
       if(millis() - timerMbus > 500 && mbusLoopStatus == 1){ // Request M-Bus Records
         mbusLoopStatus = 2;
-        mbus_clearRXbuffer();
-        mbus_request_data(currentAddress);
+        MBusCom.clearRXbuffer();
+        MBusCom.request_data(currentAddress);
       }
       if(millis() - timerMbus > 2000 && mbusLoopStatus == 2){ // Receive and decode M-Bus Records
         mbusLoopStatus = 3;
         bool mbus_good_frame = false;
         byte mbus_data[MBUS_DATA_SIZE] = { 0 };
-        mbus_good_frame = mbus_get_response(mbus_data, sizeof(mbus_data));
+        mbus_good_frame = MBusCom.get_response(mbus_data, sizeof(mbus_data));
 
         /*
         //------------------ only for debug, you will recieve the whole M-Bus telegram bytewise in HEX for analysis -----------------
@@ -477,7 +533,7 @@ void loop() {
             jsonstring[0] = 0;
             client.publish(String(String(userData.mbusinoName)  +"/MBus/SlaveAddress"+String(currentAddress)+ "/MBUSerror").c_str(), "no_good_telegram");
         }
-        mbus_normalize(currentAddress);
+        MBusCom.normalize(currentAddress);
       } 
       if(millis() - timerMbus > 2500 && mbusLoopStatus == 3){  // Send decoded M-Bus secords via MQTT
         mbusLoopStatus = 0;

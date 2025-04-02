@@ -6,14 +6,14 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h> 
 
-#define MBUSINO_VERSION "0.9.16"
+#define MBUSINO_VERSION "0.9.19"
 
 extern AsyncWebServer server;
 extern AsyncWebSocket ws; // access at ws://[esp ip]/ws
 extern AsyncEventSource events; // event source (Server-Sent events)
 
 
-typedef struct settings {
+struct settings {
   char ssid[30];
   char password[30];
   char mbusinoName[11];
@@ -54,7 +54,7 @@ public:
   }
 
   void handleRequest(AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", html_buffer); 
+    request->send(200, "text/html", html_buffer); 
   }
 };
 

@@ -20,7 +20,7 @@ bool waitToSetAddress = false;
 
 void setupServerMbusino(){
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-  request->send_P(200, "text/html", html_buffer); 
+  request->send(200, "text/html", html_buffer); 
   //Serial.println("Client Connected");
   });
     
@@ -176,7 +176,7 @@ void setupServerMbusino(){
   });
 
   server.on("/setaddress", HTTP_GET, [](AsyncWebServerRequest *request){
-  request->send_P(200, "text/html", setAddress_html);
+  request->send(200, "text/html", setAddress_html);
   });
 
 }
