@@ -46,7 +46,7 @@ HardwareSerial MbusSerial = Serial2;
 #else
 HardwareSerial MbusSerial(1);
 #endif
-MBusCom MBusCom(&MbusSerial);
+MBusCom MBusCom(&MbusSerial,4,5);
 #endif
 
 // Pins for an ESP32 C3 Supermini
@@ -236,9 +236,13 @@ void setup() {
   EEPROM.commit();
   EEPROM.end();
 
-  sprintf(html_buffer, index_html,userData.ssid,userData.mbusinoName,userData.extension,userData.haAutodisc,userData.sensorInterval/1000,userData.mbusInterval/1000,userData.broker,userData.mqttPort,userData.mqttUser,userData.mbusSlaves,userData.mbusAddress1,userData.mbusAddress2,userData.mbusAddress3);
+  Serial.println("EEPROM Init done!");
 
+  sprintf(html_buffer, index_html,userData.ssid,userData.mbusinoName,userData.extension,userData.haAutodisc,userData.sensorInterval/1000,userData.mbusInterval/1000,userData.broker,userData.mqttPort,userData.mqttUser,userData.mbusSlaves,userData.mbusAddress1,userData.mbusAddress2,userData.mbusAddress3);
+  WiFi.onEvent(WiFiEvent);
+  Serial.println("Wifi Event registered");
   WiFi.hostname(userData.mbusinoName);
+ 
   client.setServer(userData.broker, userData.mqttPort);
   client.setCallback(callback);
 
