@@ -34,10 +34,6 @@ You should have received a copy of the GNU General Public License along with thi
 #include <html.h>
 
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <ESPAsyncTCP.h>
-#elif defined(ESP32)
 #include <WiFi.h>
 #include <AsyncTCP.h>
 
@@ -46,8 +42,9 @@ HardwareSerial MbusSerial = Serial2;
 #else
 HardwareSerial MbusSerial(1);
 #endif
-MBusCom MBusCom(&MbusSerial,4,5);
-#endif
+// MBusCom MBusCom(&MbusSerial,4,5);
+MBusCom MBusCom(&MbusSerial, 5, 17);
+
 
 // Pins for an ESP32 C3 Supermini
 #ifndef ETH_PHY_CS
@@ -87,7 +84,7 @@ MBusCom MBusCom(&MbusSerial,4,5);
 #elif defined(WT32_ETH01) // Find out what Board would work
 #define ONE_WIRE_BUS1 15
 #define ONE_WIRE_BUS2 14
-#define ONE_WIRE_BUS3 4
+#define ONE_WIRE_BUS3 18
 #define MBUSSerial Serial2
 #elif defined(ESP32)
 #define ONE_WIRE_BUS1 16 //2   //D4
@@ -156,6 +153,7 @@ bool engelmann = false;
 bool waitForRestart = false;
 // bool polling = false;
 bool ledStatus = false;
+uint8_t usedMQTTconection = 0;
 
 unsigned long timerMQTT = 15000;
 unsigned long timerSensorRefresh1 = 0;
@@ -166,6 +164,8 @@ unsigned long timerReconnect = 0;
 unsigned long timerReboot = 0;
 unsigned long timerSetAddress = 0;
 unsigned long timerPulse = 0;
+unsigned long timerNetworkChange = 0;
+
 
 void calibrationAverage();
 void calibrationSensor(uint8_t sensor);
@@ -189,6 +189,10 @@ uint16_t credentialsSaved = 123;  // shows if EEPROM used befor for credentials
 #include "networkEvents.h"
 #endif
 
+WiFiClient wfClient;
+//NetworkClient ethClient;
+extern bool eth_connected;
+extern bool networkLost;
 
 void setup() {
 
@@ -207,12 +211,13 @@ void setup() {
   // The argument order changed in esp32-arduino v3+
      ETH.begin(ETH_PHY_LAN8720, 1, 23, 18, 16, ETH_CLOCK_GPIO0_IN);
   #else
-    ETH.begin(1, 16, 23, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+//    Network.onEvent(onEvent);
+//    ETH.begin();
   #endif
 
   Serial.println("ETH started, now reading EEPRPOM");
 
-  delay(1000);
+  delay(2000);
 
   EEPROM.begin(512);
   EEPROM.get(eeAddrCalibrated, calibrated);
@@ -242,6 +247,7 @@ void setup() {
   WiFi.onEvent(WiFiEvent);
   Serial.println("Wifi Event registered");
   WiFi.hostname(userData.mbusinoName);
+  ETH.begin();
  
   client.setServer(userData.broker, userData.mqttPort);
   client.setCallback(callback);
@@ -344,23 +350,156 @@ void setup() {
   if(userData.extension == 5){
     // Vorbereitungen für den BME280
     bmeStatus = bme.begin(0x76);
+    Serial.println("BME set up now");
   }
   mbusAddress[0] = userData.mbusAddress1;
   mbusAddress[1] = userData.mbusAddress2;
   mbusAddress[2] = userData.mbusAddress3;
+  Serial.print("set Addresses to MBus:");
+  Serial.print( mbusAddress[0] );
+  Serial.print(" ");
+  Serial.print( mbusAddress[1] );
+  Serial.print(" ");
+  Serial.println( mbusAddress[2] );
+
+}
+
+typedef void (*fktptr_t)(void);
+int TaskIdx = 0;
+
+void checkArduino(void);
+void checkRestart(void);
+void fn_newCredentials(void);
+void t4a(void);
+void t4b(void);
+void t5(void);
+void t6(void);
+
+fktptr_t Tasks[] = {checkArduino,checkRestart,fn_newCredentials,NULL,NULL,NULL,NULL}; // My normal task list, I want to follow up in the loop
+fktptr_t AddTasksTab[] = {t4a, t4b, t5, t6};
+
+fktptr_t SingleTasks[] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+
+void addSingleTask( fktptr_t x)
+{
+    const auto len = sizeof(SingleTasks)/sizeof(SingleTasks[0]);
+    auto i = 0;
+    for( ; i < len && SingleTasks[i] != NULL ; ++i );
+    if( i >= len )
+        return;
+    SingleTasks[i] = x;
+};
+
+void nextr(fktptr_t x)
+{
+    Tasks[TaskIdx] = x;
 }
 
 
-void loop() {
+void addTasks(int idx)
+{
+    int i;
+
+    // Ende suchen
+    for (i = 0; Tasks[i] != NULL; ++i)
+    {}
+    // Check if we exceeded the length!
+    if( i >= sizeof(Tasks) )
+      return;
+ //   Serial.printf("i = %d.\r\n", i);
+    Tasks[i] = AddTasksTab[idx];
+}
+
+// Funktion to restart ESP 
+void restart(void)
+{
+   ESP.restart();
+};
+
+void checkArduino(void)
+{
   ArduinoOTA.handle();
   if(apMode == true){
     dnsServer.processNextRequest();
   }
+};
 
-  if(apMode == true && millis() > 300000){
-    ESP.restart();
+void checkRestart(void)
+{
+  if(apMode == true && eth_connected == false && millis() > 300000){
+    nextr(restart);
+  }
+};
+
+// Function pointer for restart
+void fn_restartCredentials(void);
+
+void fn_newCredentials(void)
+{
+  if(credentialsReceived == true){
+    EEPROM.begin(512);
+    EEPROM.put(100, userData);
+    credentialsSaved = 500;
+    EEPROM.put(eeAddrCredentialsSaved, credentialsSaved);
+    EEPROM.commit();
+    EEPROM.end();
+    timerReboot = millis();
+  //  waitForRestart = true;
+    nextr(fn_restartCredentials);
+  }
+}
+
+void fn_restartCredentials(void)
+{
+  if((millis() - timerReboot) > 1500){
+    Serial.println("restart");
+    nextr(restart);
+  }
+}
+
+void t4a(void)
+{
+  if((eth_connected == false) && (usedMQTTconection != 2) && (millis()-timerNetworkChange) > 5000){
+    client.setClient(wfClient);
+    usedMQTTconection = 2;
+    Serial.println("MQTT set connection over Wifi");
+    reconnect();
+    timerNetworkChange = millis();
+  }
+  if((eth_connected == true) && (usedMQTTconection != 1) && (millis()-timerNetworkChange) > 5000){
+    client.setClient(wfClient);
+    usedMQTTconection = 1;
+    Serial.println("MQTT set connection over Ethernet");
+    reconnect();
+    timerNetworkChange = millis();
   }
 
+  if (!client.connected() && ((millis() - timerReconnect) > 5000)) {  
+    Serial.println("MQTT no connection");      
+    reconnect();
+    timerReconnect = millis();
+  }
+  else
+    nextr(t4b);
+};
+
+void t4b(void)
+{
+
+}
+
+/* */
+void loop() {
+  // checkArduino
+  ArduinoOTA.handle();
+  if(apMode == true){
+    dnsServer.processNextRequest();
+  }
+  // checkRestart
+  if(apMode == true && eth_connected == false && millis() > 300000){
+    ESP.restart();
+  }
+  // fn_newCredentials
   if(credentialsReceived == true && waitForRestart == false){
     EEPROM.begin(512);
     EEPROM.put(100, userData);
@@ -371,20 +510,36 @@ void loop() {
     timerReboot = millis();
     waitForRestart = true;
   }
-
+  // fn_restartCredentials
   if(waitForRestart==true && (millis() - timerReboot) > 1500){
+    Serial.println("restart");
     ESP.restart();
   }
 
-  if(WiFi.status() == WL_CONNECTED && apMode == false){
-    if (!client.connected()) { 
-      if((millis() - timerReconnect) > 5000){
-        reconnect();
-        timerReconnect = millis();
-      }
-    }
-    else{ // the whole main code run only if MQTT is connectet
-      client.loop();  //MQTT Funktion
+  //to notice Changes in Network an assign the right connection to the MQTT client
+  // t4a
+  if((eth_connected == false) && (usedMQTTconection == 1) && (millis()-timerNetworkChange) > 5000){
+    client.setClient(wfClient);
+    usedMQTTconection = 2;
+    Serial.println("MQTT set connection over Wifi");
+    reconnect();
+    timerNetworkChange = millis();
+  }
+  if((eth_connected == true) && (usedMQTTconection == 2) && (millis()-timerNetworkChange) > 5000){
+    client.setClient(wfClient);
+    usedMQTTconection = 1;
+    Serial.println("MQTT set connection over Ethernet");
+    reconnect();
+    timerNetworkChange = millis();
+  }
+
+  if (!client.connected() && ((millis() - timerReconnect) > 5000)) {  
+    Serial.println("MQTT no connection");      
+    reconnect();
+    timerReconnect = millis();
+  } // t4b
+  else{ // the whole main code run only if MQTT is connectet
+    client.loop();  //MQTT Funktion
 
       if(newAddressReceived == true){
         newAddressReceived = false;
@@ -402,6 +557,7 @@ void loop() {
 
       ///////////////// publish settings ///////////////////////////////////
       if((millis()-timerDebug) >10000){
+        Serial.println("I publish my settings now");
         timerDebug = millis();
         client.publish(String(String(userData.mbusinoName) + "/settings/ssid").c_str(), userData.ssid); 
         //client.publish(String(String(userData.mbusinoName) + "/settings/password").c_str(), String(userData.password)); 
@@ -461,16 +617,16 @@ void loop() {
         }
         timerMQTT = millis();
       }
-    ////////// M- Bus ###############################################
-    /*
-    mbusLoopStatus
-    0 = ready
-    1 = mbus cleared
-    2 = records requested
-    3 = records received
+                ////////// M- Bus ###############################################
+                /*
+                mbusLoopStatus
+                0 = ready
+                1 = mbus cleared
+                2 = records requested
+                3 = records received
 
 
-    */
+                */
 
       if((millis() - timerMbus > userData.mbusInterval || polling == true) && mbusLoopStatus == 0){ // Normalize the M-Bus 
         timerMbus = millis();  
@@ -490,15 +646,21 @@ void loop() {
       }
 
       if(millis() - timerMbus > 500 && mbusLoopStatus == 1){ // Request M-Bus Records
+        Serial.println("Requesting MBus data now");
         mbusLoopStatus = 2;
         MBusCom.clearRXbuffer();
         MBusCom.request_data(currentAddress);
       }
       if(millis() - timerMbus > 2000 && mbusLoopStatus == 2){ // Receive and decode M-Bus Records
+        Serial.println("Fetching data from MBus");
         mbusLoopStatus = 3;
         bool mbus_good_frame = false;
         byte mbus_data[MBUS_DATA_SIZE] = { 0 };
         mbus_good_frame = MBusCom.get_response(mbus_data, sizeof(mbus_data));
+        if( mbus_good_frame )
+          Serial.println("Got good frame");
+        else
+          Serial.println("Got bad frame");
 
         /*
         //------------------ only for debug, you will recieve the whole M-Bus telegram bytewise in HEX for analysis -----------------
@@ -539,7 +701,8 @@ void loop() {
         }
         MBusCom.normalize(currentAddress);
       } 
-      if(millis() - timerMbus > 2500 && mbusLoopStatus == 3){  // Send decoded M-Bus secords via MQTT
+      if(millis() - timerMbus > 2500 && mbusLoopStatus == 3){  // Send decoded M-Bus records via MQTT
+        Serial.println("Sending MQTT data now");
         mbusLoopStatus = 0;
         JsonDocument root;
         deserializeJson(root, jsonstring); // load the json from a global array
@@ -581,7 +744,7 @@ void loop() {
         }
         address = 0; 
       }
-    } 
+ //   } 
   }
 }
 
